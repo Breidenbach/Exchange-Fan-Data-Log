@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*!
+/*
 
 This program controls operation of the air exchange fan, and logs data 
 from four temperature sensors as well as the switches on the sliding
@@ -48,10 +48,18 @@ buttons for setting the requested percent, reporting the current
 percent, toggling enablement of adjustment.  The percentage calculated
 time running per on/off cycle.
 
+Update log:
+1.1  8/29/2016
+Correct output string length
+Correct clock setting to use iPad values
+Add F macros to test print strings.
+Correct printing ratios for debug
+Remove temperature adjustments
+
 */
 /**************************************************************************/
 
-// #define outputSerial  //  to produce serial port output for debugging
+//#define outputSerial  //  to produce serial port output for debugging
 
 #include <SPI.h>
 #include <Wire.h>
@@ -65,13 +73,6 @@ const unsigned long interval = 300; //  5 min logging interval
 const unsigned long doorDelay = 120;   //  temp 12 sec delay
 const int maxN = 64;
 const int defaultPercent = 30;
-
-// initial linear calibration of temp sensors, since they do not all read
-// the same temperatures when in close proximity.
-float tempAdjust[4] =  {0.448903404269729,
-                        0.12480188763582,
-                        0.0185702619134576,
-                        -0.59227555381895}; // in degrees F
 
 // Pin definitions
 const byte      bedroomSensor = 2;
@@ -137,14 +138,13 @@ int       officeSensorInput = LOW;
 int       kitchenSensorInput = LOW;
 int       furnaceSensorInput = LOW;
 
-
 // Variables necessary for SD card read/write
 char filename[20];
 word  filenumber = 0;
 unsigned long  offset = 0;
 int logOffset;
 char errorMsgBuffer[30];
-char outputString[30];
+char outputString[40];
 
 // To store the temperature reading
 float degF[4];
@@ -177,9 +177,10 @@ float calcMovingAverage (float mA, float Xi, int & count);
 void  writeHeadersToFile( void );
 
 void setup() {
-//  #ifdef outputSerial
-//  Serial.begin(9600);
-//  #endif
+  #ifdef outputSerial
+  Serial.begin(9600);
+  Serial.println(F ("starting sketch"));
+  #endif
   
   Andee.begin(); // Sets up the communication link between Arduino and the Annikken Andee
 
@@ -199,7 +200,7 @@ void setup() {
     clockDisplay.setData((char*)"no clock");
     clockDisplay.update();
     #ifdef outputSerial
-    Serial.println("no clock");
+    Serial.println(F ("no clock"));
     #endif
   }
   if (Andee.isConnected() == 1) AndeeFlag = 1;
@@ -217,9 +218,11 @@ void setup() {
        (digitalRead(officeSensor) == LOW) && 
   	 	 (digitalRead(kitchenSensor) == LOW) &&
   		  (digitalRead(furnaceSensor) == LOW))  {
+    #ifdef outputSerial
+    Serial.println(F("setting intial to RUN"));
+    #endif
   	runState = Running;
     SSrunning = true;
-    onPeriodStart = currentTime;
     sprintf(operatingDisplayStatus, "%s", "Running");
     digitalWrite(relayControlPin, LOW);
   } else {
@@ -230,14 +233,13 @@ void setup() {
     sprintf(operatingDisplayStatus, "%s", "  Off  ");
     digitalWrite(relayControlPin, HIGH);
   }
-  totPeriodStart = currentTime;
 }  // end of setup()
 
 // This is the function meant to define the types and the apperance of
 // all the objects on your smartphone
 void initializeAndeeDisplays() {
   #ifdef outputSerial
-  Serial.println("     initializeAndeeDisplays");
+  Serial.println(F ("     initializeAndeeDisplays"));
   #endif
   
   Andee.clear(); // Clear the screen of any previous displays
@@ -254,8 +256,8 @@ void initializeAndeeDisplays() {
   blowerPercent.setLocation(3, 2, ONE_QUART);
   blowerPercent.setTitle((char*)"Blower Percent");
   blowerPercent.setData((char*)"");
-  sprintf (strTemp0, "Moving Average, N=%d", maxN);
-  blowerPercent.setUnit((char*)strTemp0);
+  sprintf (outputString, "Moving Average, N=%d", maxN);
+  blowerPercent.setUnit((char*)outputString);
   blowerPercent.update();
 
   sliderAdjustPercent.setId(2);
@@ -295,7 +297,7 @@ void initializeAndeeDisplays() {
   btnSetClock.setId(6);
   btnSetClock.setType(BUTTON_IN);
   btnSetClock.setLocation(0, 1, ONE_QUART);
-  btnSetClock.setTitle((char*)"Set Clock to iPad 3/15/2016");
+  btnSetClock.setTitle((char*)"Set Clock to iPad (ignores DST)");
   btnSetClock.setColor(BLUE);
   btnSetClock.update();
      
@@ -326,7 +328,7 @@ void loop() {
       initializeAndeeDisplays();
       AndeeFlag = 1; //this flag is to signal that Andee has already connected and the function setup() has run once.
       #ifdef outputSerial
-      Serial.println("Andee connected");
+      Serial.println(F ("Andee connected"));
       #endif
     }
   } else {
@@ -334,7 +336,7 @@ void loop() {
       if (AndeeFlag) {
          AndeeFlag = 0;
          #ifdef outputSerial
-         Serial.println("connect flag set to 0");
+         Serial.println(F ("connect flag set to 0"));
          #endif    
       }
     }
@@ -389,6 +391,10 @@ void loop() {
   DateTime now = rtc.now();
   currentTime = now.unixtime();
   currentDay = currentTime/86400;
+  if (onPeriodStart == 0 && runState == Running) {
+    // should only happen at startup
+    onPeriodStart = currentTime;
+  }
 
   sprintf(timeStamp, "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
   clockDisplay.setData(timeStamp);
@@ -404,10 +410,9 @@ void loop() {
     }
     // Read and print out the temperature, then convert to *F
     tempsensor[ndx].shutdown_wake(0); // try wake up here
-    degF[ndx] = tempsensor[ndx].readTempC()*9/5 + 32 + tempAdjust[ndx];
+    degF[ndx] = tempsensor[ndx].readTempC()*9/5 + 32;
     tempDisplayF[ndx].setData(degF[ndx]); 
     tempDisplayF[ndx].update(); 
-    //  delay(250);  commented out 3/15 after install
 
     tempsensor[ndx].shutdown_wake(1); // shutdown MSP9808 - power consumption ~0.1 mikro Ampere
   }
@@ -465,6 +470,19 @@ void loop() {
   switch (runState) {
   case Running:
     actualRatio = calcPeriodRatio ( currentTime, onPeriodStart, totPeriodStart );
+    #ifdef outputSerial
+    Serial.print(F("actual ratio in case running: "));
+    Serial.print(F("rslt, curr, on, base: "));
+    dtostrf(actualRatio, 5, 3, strTemp0);
+    Serial.print(strTemp0);
+    Serial.print(F("  "));
+    Serial.print(currentTime);
+    Serial.print(F("  "));
+    Serial.print(onPeriodStart);
+    Serial.print(F("  "));
+    Serial.println(totPeriodStart);
+    #endif
+    
     if ( adjustmentEnabled && ( actualRatio > desiredRatio ) ) {
       runState = notRunningAdjusting;
     }
@@ -521,25 +539,21 @@ void loop() {
   break;
 }
 
-  dtostrf(100.0 * movingAverage, 5, 3, strTemp0);
+  dtostrf(100.0 * movingAverage, 5, 2, strTemp0);
   blowerPercent.setData(strTemp0);
-  sprintf(strTemp0, "%d", desiredPercent);
-  dtostrf(100.0 * actualRatio, 5, 3, strTemp0);
   blowerPercent.update();
   delay(250);
   #ifdef outputSerial
-  dtostrf(actualRatio, 5, 3, strTemp0);
+  Serial.print (F ("mov avg: "));
   Serial.print (strTemp0);
-  Serial.print ("  ");
-  dtostrf(desiredRatio, 5, 3, strTemp0);
-  Serial.println (strTemp0);
+  sprintf(outputString, "  dsrd: %d  act:  ", desiredPercent);
+  Serial.print (outputString);
+  dtostrf(100.0 * actualRatio, 5, 3, strTemp0);
+  Serial.print (strTemp0);
+  Serial.print (F ("  "));
+  sprintf (outputString, "furn = %d ", SSfurnace);
+  Serial.println(outputString);
   #endif
-  #ifdef outputSerial
-    sprintf (strTemp0, "furn = %d ", SSfurnace);
-    Serial.println(strTemp0);
-    sprintf (strTemp0, "shorter %d   longer %d", adjustShorter, adjustLonger);
-    Serial.println(strTemp0);
-   #endif
     
   sprintf (outputString, "%s %s %s %s %s", bedroomDisplayStatus, officeDisplayStatus,
           kitchenDisplayStatus, furnaceDisplayStatus, operatingDisplayStatus);
@@ -554,10 +568,9 @@ void loop() {
       #ifdef outputSerial
       sprintf(outputString, "%d  ", offset);
       Serial.print(outputString);
-      sprintf(outputString, "%s, %s, %s, %s, %s, ", todayDate, timeStamp,
-          strTemp0, strTemp1, strTemp2);
+      sprintf(outputString, "%s, %s, ", todayDate, timeStamp);
       Serial.print(outputString);
-      sprintf(outputString, "%%s, %u, %u, %u, %u, %u\n", strTemp3, SSbedroom,
+      sprintf(outputString, " %u, %u, %u, %u, %u\n", SSbedroom,
           SSoffice, SSkitchen, SSfurnace, SSrunning);
       Serial.print(outputString);
       #endif
@@ -575,8 +588,8 @@ void loop() {
         }
       }        
       if (offset != -1) {
-        dtostrf(100 * movingAverage, 5, 3, strTemp0);
-        sprintf(outputString, "%s,", strTemp0);
+        dtostrf(100 * movingAverage, 5, 2, strTemp0);
+        sprintf(outputString, "%s, %d,", strTemp0, averageCount);  
         offset = Andee.appendSD(filename, outputString, errorMsgBuffer);
       }
       if (offset != -1) {
@@ -618,32 +631,33 @@ void loop() {
   logStats.update();
 }    
 void setRTC() {
-  int day;
-  int month;
-  int year;
-  int hour; 
-  int minute;
-  int second;
 
-  //  Seem to be problems getting date from IOS device
-  
-//  Serial.println  ( "New test");
-//  Andee.getDeviceDate(&day, &month, &year);
-//  sprintf(todayDate, "%d/%d/%d", month, day, year);
-//  Serial.println (todayDate);
-//  Andee.getDeviceTime(&hour, &minute, &second);
-//  sprintf(timeStamp, "%02d:%02d:%02d", hour, minute, second);
-//  Serial.println (timeStamp);
-//  rtc.adjust(DateTime(year, month, day, hour, minute, second));
-    // This line sets the RTC with an explicit date & time, for example to set
-    // January 21, 2014 at 3am you would call:
-    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
-     rtc.adjust(DateTime(2016, 3, 15, 14, 4, 0));
+/* set time to iPad time
+ *  Note that time retrieved from iPad is not adjusted for Daylight Savings Time!
+ */
+ 
+  int daySet;
+  int monthSet;
+  int yearSet;
+  int hourSet; 
+  int minuteSet;
+  int secondSet;
+
+  Andee.getDeviceDate(&daySet, &monthSet, &yearSet);
+  Andee.getDeviceTime(&hourSet, &minuteSet, &secondSet);
+  #ifdef outputSerial
+  Serial.println  (F( "Time set test"));
+  sprintf(todayDate, "%d/%d/%d", monthSet, daySet, yearSet);
+  Serial.println (todayDate);
+  sprintf(timeStamp, "%02d:%02d:%02d", hourSet, minuteSet, secondSet);
+  Serial.println (timeStamp);
+  #endif
+  rtc.adjust(DateTime(yearSet, monthSet, daySet, hourSet, minuteSet, secondSet));
 }
 
 void writeHeadersToFile() {
   #ifdef outputSerial
-  Serial.println("writing headers to SD");
+  Serial.println(F("writing headers to SD"));
   #endif
   // Write table headers to SD card
   DateTime now = rtc.now();
@@ -654,7 +668,7 @@ void writeHeadersToFile() {
     offset = Andee.appendSD(filename, (char*)"OutsdAdj,Exh,ExhAdj,", errorMsgBuffer);
   }
   if (offset != -1) {
-    offset = Andee.appendSD(filename, (char*)"movingAvg,desired,", errorMsgBuffer);
+    offset = Andee.appendSD(filename, (char*)"movingAvg, N, desired,", errorMsgBuffer);
   }
   if (offset != -1) {
     offset = Andee.appendSD(filename, (char*)"actual,adj enab,", errorMsgBuffer);
